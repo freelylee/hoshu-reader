@@ -1,10 +1,16 @@
 import { JSZip } from './engines';
-import { dirOf, joinPath, els, assetUrl } from './bookParsers';
+import { dirOf, joinPath, els, assetUrl, scopeCss } from './bookParsers';
 import type { Book, TocItem } from '../types/reader';
 
 export async function parseEpub(b: Book) {
-  if (!b.file) throw new Error('文件未加载');
-  const zip = await JSZip.loadAsync(await b.file.arrayBuffer());
+  let buf: ArrayBuffer | null = null;
+  if (b.file) {
+    buf = await b.file.arrayBuffer();
+  } else if (b.fileData) {
+    buf = b.fileData.slice(0);
+  }
+  if (!buf) throw new Error('文件未加载，请选择此本地电子书文件');
+  const zip = await JSZip.loadAsync(buf);
   const contFile = zip.file('META-INF/container.xml');
   if (!contFile) throw new Error('不是有效的 EPUB：缺少 META-INF/container.xml');
   const cdoc = new DOMParser().parseFromString(await contFile.async('string'), 'application/xml');
@@ -193,6 +199,15 @@ export async function cleanEpubHtml(raw: string, path: string, data: any): Promi
   const body = doc.body;
   if (!body) return '';
 
+  // 提取章节内联 <style>，避免被过滤后丢失排版细节
+  let chapterInlineStyles = '';
+  Array.from(doc.querySelectorAll('style')).forEach((st) => {
+    const txt = st.textContent || '';
+    if (txt.trim()) {
+      chapterInlineStyles += '\n' + scopeCss(txt, '#reader-body');
+    }
+  });
+
   Array.from(body.querySelectorAll('script,style,link,iframe,object,embed,noscript,meta,base')).forEach((n) =>
     n.remove()
   );
@@ -206,6 +221,8 @@ export async function cleanEpubHtml(raw: string, path: string, data: any): Promi
     if (old) n.setAttribute('id', prefix + old);
   });
 
+  const imageTasks: Promise<void>[] = [];
+
   for (const n of Array.from(body.querySelectorAll('*'))) {
     for (const at of Array.from(n.attributes)) {
       if (/^on/i.test(at.name)) n.removeAttribute(at.name);
@@ -214,11 +231,29 @@ export async function cleanEpubHtml(raw: string, path: string, data: any): Promi
     if (ln === 'img' || ln === 'image') {
       const src = n.getAttribute('src') || n.getAttribute('xlink:href') || n.getAttribute('href') || '';
       n.removeAttribute('srcset');
-      n.removeAttribute('xlink:href');
-      if (!src || /^(data:|blob:)/i.test(src)) continue;
-      n.removeAttribute('src');
-      n.setAttribute('data-epub-src', joinPath(base, src.split('#')[0]));
-      if (ln === 'image') n.removeAttribute('href');
+      if (!src) continue;
+      if (/^(data:|blob:)/i.test(src)) continue;
+      const cleanSrc = src.split('#')[0].split('?')[0];
+      const fullPath = joinPath(base, cleanSrc);
+      n.setAttribute('data-epub-src', fullPath);
+
+      // 实时异步加载 zip 内嵌图片资源并赋予有效 blob 链接
+      imageTasks.push(
+        assetUrl(data, fullPath)
+          .then((url) => {
+            if (url) {
+              if (ln === 'img') {
+                n.setAttribute('src', url);
+              } else {
+                n.setAttribute('href', url);
+                n.setAttribute('xlink:href', url);
+              }
+            }
+          })
+          .catch((e) => {
+            console.warn('加载 EPUB 内嵌插图失败:', fullPath, e);
+          })
+      );
     } else if (ln === 'a') {
       const href = n.getAttribute('href') || '';
       if (!href) continue;
@@ -243,7 +278,13 @@ export async function cleanEpubHtml(raw: string, path: string, data: any): Promi
       if (ci >= 0) n.setAttribute('data-chapter', String(ci));
     }
   }
-  return body.innerHTML;
+
+  if (imageTasks.length) {
+    await Promise.all(imageTasks);
+  }
+
+  const stylePrefix = chapterInlineStyles.trim() ? `<style>${chapterInlineStyles}</style>` : '';
+  return stylePrefix + body.innerHTML;
 }
 
 export async function epubChapterHtml(b: Book, data: any, idx: number): Promise<string> {

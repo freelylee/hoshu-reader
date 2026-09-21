@@ -24,7 +24,7 @@ export async function saveBookToDb(book: Book): Promise<void> {
     const tx = db.transaction(STORE_BOOKS, 'readwrite');
     const store = tx.objectStore(STORE_BOOKS);
 
-    // 存储除 DOM 句柄外的完整数据
+    // 仅存储书籍元数据、书签、笔记、高亮与本地文件路径，不存储臃肿易损的二进制内容
     const clone = {
       id: book.id,
       title: book.title,
@@ -50,7 +50,7 @@ export async function saveBookToDb(book: Book): Promise<void> {
       textModeActive: book.textModeActive,
       bilingualActive: book.bilingualActive,
       bilingualParas: book.bilingualParas,
-      fileData: book.fileData || null
+      localPath: book.localPath || ''
     };
 
     store.put(clone);
@@ -74,16 +74,9 @@ export async function loadAllBooksFromDb(): Promise<Book[]> {
       req.onsuccess = () => {
         const rawList = req.result || [];
         const books: Book[] = rawList.map((item: any) => {
-          let file: File | undefined;
-          if (item.fileData) {
-            file = new File([item.fileData], `${item.title}.${item.ext}`, {
-              type: item.kind === 'pdf' ? 'application/pdf' : 'application/octet-stream'
-            });
-          }
-          return {
-            ...item,
-            file
-          };
+          // 剥离历史旧数据中的 fileData，纯净加载元数据
+          const { fileData: _oldBuf, ...clean } = item;
+          return clean as Book;
         });
         resolve(books);
       };

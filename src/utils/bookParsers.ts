@@ -36,11 +36,49 @@ export function joinPath(dir: string, href: string) {
 export async function assetUrl(data: any, path: string): Promise<string> {
   if (!path) return '';
   if (data.blobs[path]) return data.blobs[path];
-  const f = data.zip.file(path);
+
+  let f = data.zip.file(path);
+
+  // 尝试剥离多余的前导斜杠
+  if (!f && path.startsWith('/')) {
+    f = data.zip.file(path.replace(/^\/+/, ''));
+  }
+
+  // 尝试结合 OPF 清单目录前缀
+  if (!f && data.opfDir && !path.startsWith(data.opfDir)) {
+    f = data.zip.file(joinPath(data.opfDir, path));
+  }
+
+  // 尝试 URL 解码（处理 %20 空格等）
+  if (!f) {
+    try {
+      const dec = decodeURIComponent(path);
+      f = data.zip.file(dec);
+      if (!f && data.opfDir) {
+        f = data.zip.file(joinPath(data.opfDir, dec));
+      }
+    } catch {}
+  }
+
+  // 尝试忽略大小写或在 zip 中匹配同名资源
+  if (!f) {
+    const cleanName = path.split('/').pop()?.toLowerCase() || '';
+    const cleanPath = path.toLowerCase().replace(/^\/+/, '');
+    const allFiles = Object.keys(data.zip.files);
+    const matchKey = allFiles.find((k) => {
+      const kl = k.toLowerCase();
+      return kl === cleanPath || kl.endsWith('/' + cleanName) || kl === cleanName;
+    });
+    if (matchKey) {
+      f = data.zip.file(matchKey);
+    }
+  }
+
   if (!f) return '';
   const ext = (path.split('.').pop() || '').toLowerCase();
   const blob = await f.async('blob');
-  const url = URL.createObjectURL(EPUB_MIME[ext] ? blob.slice(0, blob.size, EPUB_MIME[ext]) : blob);
+  const mime = EPUB_MIME[ext] || blob.type || 'image/jpeg';
+  const url = URL.createObjectURL(new Blob([blob], { type: mime }));
   data.blobs[path] = url;
   return url;
 }

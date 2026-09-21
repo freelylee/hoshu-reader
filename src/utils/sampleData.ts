@@ -199,6 +199,112 @@ For translation tasks, the Transformer can be trained significantly faster than 
     textMarkdown: paperMd,
     bilingualActive: false,
     bilingualParas: sampleBilingualParas,
-    mineruStatus: 'done'
+    mineruStatus: 'done',
+    fileData: createSamplePdfBinary()
   };
+}
+
+export function createSamplePdfBinary(): ArrayBuffer {
+  const pdfString = `%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 8 0 R >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 6 0 R >> >> /Contents 9 0 R >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+7 0 obj
+<< /Length 260 >>
+stream
+BT
+/F1 22 Tf
+50 780 Td
+(Attention Is All You Need) Tj
+/F1 11 Tf
+0 -30 Td
+(Ashish Vaswani, Noam Shazeer, Niki Parmar, et al. - Google Brain) Tj
+0 -40 Td
+(Abstract: The dominant sequence transduction models are based on complex) Tj
+0 -20 Td
+(recurrent or convolutional neural networks. We propose the Transformer.) Tj
+0 -40 Td
+(1. Introduction) Tj
+0 -20 Td
+(Recurrent neural networks have been firmly established as state of the art.) Tj
+ET
+endstream
+endobj
+8 0 obj
+<< /Length 260 >>
+stream
+BT
+/F1 16 Tf
+50 780 Td
+(3. Attention Mechanism) Tj
+/F1 11 Tf
+0 -30 Td
+(An attention function can be described as mapping a query and a set of) Tj
+0 -20 Td
+(key-value pairs to an output.) Tj
+0 -30 Td
+(Attention(Q, K, V) = softmax( Q K^T / sqrt(d_k) ) V) Tj
+0 -40 Td
+(Multi-Head Attention allows the model to jointly attend to information) Tj
+0 -20 Td
+(from different representation subspaces at different positions.) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Length 220 >>
+stream
+BT
+/F1 16 Tf
+50 780 Td
+(5. Conclusion) Tj
+/F1 11 Tf
+0 -30 Td
+(In this work, we presented the Transformer, the first sequence) Tj
+0 -20 Td
+(transduction model based entirely on attention.) Tj
+0 -40 Td
+(We are excited about the future of attention-based models and plan) Tj
+0 -20 Td
+(to apply them to other tasks.) Tj
+ET
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000133 00000 n 
+0000000257 00000 n 
+0000000381 00000 n 
+0000000505 00000 n 
+0000000572 00000 n 
+0000000885 00000 n 
+0000001198 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+1471
+%%EOF`;
+  const buf = new Uint8Array(pdfString.length);
+  for (let i = 0; i < pdfString.length; i++) {
+    buf[i] = pdfString.charCodeAt(i);
+  }
+  return buf.buffer;
 }

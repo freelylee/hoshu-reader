@@ -162,6 +162,9 @@
               <div class="t-mute truncate">
                 {{ b.author || '未知作者' }} · {{ b.ext.toUpperCase() }} · {{ fmtSize(b.size) }}
               </div>
+              <div v-if="b.localPath" class="text-[10px] text-g-400 font-mono truncate" :title="'本地路径：' + b.localPath">
+                <i class="ri-hard-drive-2-line mr-0.5"></i>{{ b.localPath }}
+              </div>
             </div>
             <div class="w-32 flex-none flex-v gap-1">
               <div class="h-1 rounded bg-g-200 overflow-hidden">

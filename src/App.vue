@@ -453,8 +453,15 @@
                 <div v-if="pdfLoading" class="text-center text-xs text-g-400 py-10">
                   <i class="ri-loader-4-line inline-block animate-spin mr-1"></i>正在渲染页面…
                 </div>
-                <div v-if="pdfError" class="text-center text-xs text-danger py-10">
-                  <i class="ri-error-warning-line mr-1"></i>{{ pdfError }}
+                <div v-if="pdfError" class="text-center text-xs text-danger py-10 flex-cc flex-v gap-3">
+                  <div class="flex-c gap-1"><i class="ri-error-warning-line mr-1"></i>{{ pdfError }}</div>
+                  <button
+                    v-if="curBook && !curBook.file && curBook.id !== 'sample-transformer-paper'"
+                    class="btn btn-primary text-xs px-4 py-1.5 shadow-sm"
+                    @click="promptRelinkFile(curBook)"
+                  >
+                    <i class="ri-upload-2-line mr-1"></i>重新选择本地文件连接
+                  </button>
                 </div>
               </div>
 
@@ -478,8 +485,15 @@
                     :style="proseStyle"
                     v-html="curChapterHtml"
                   ></div>
-                  <div v-if="epubError" class="text-center text-xs text-danger py-8">
-                    <i class="ri-error-warning-line mr-1"></i>{{ epubError }}
+                  <div v-if="epubError" class="text-center text-xs text-danger py-8 flex-cc flex-v gap-3">
+                    <div class="flex-c gap-1"><i class="ri-error-warning-line mr-1"></i>{{ epubError }}</div>
+                    <button
+                      v-if="curBook && !curBook.file && curBook.id !== 'sample-transformer-paper'"
+                      class="btn btn-primary text-xs px-4 py-1.5 shadow-sm"
+                      @click="promptRelinkFile(curBook)"
+                    >
+                      <i class="ri-upload-2-line mr-1"></i>重新选择本地文件连接
+                    </button>
                   </div>
                   <div v-else-if="!curChapterHtml" class="text-center text-xs text-g-400 py-10">
                     <i class="ri-loader-4-line inline-block animate-spin mr-1"></i>
@@ -520,8 +534,15 @@
                     ></div>
                   </div>
                 </div>
-                <div v-if="epubError" class="absolute inset-x-0 top-6 text-center text-xs text-danger">
-                  <i class="ri-error-warning-line mr-1"></i>{{ epubError }}
+                <div v-if="epubError" class="absolute inset-x-0 top-6 text-center text-xs text-danger flex-cc flex-v gap-2 z-20">
+                  <div class="flex-c gap-1"><i class="ri-error-warning-line mr-1"></i>{{ epubError }}</div>
+                  <button
+                    v-if="curBook && !curBook.file && curBook.id !== 'sample-transformer-paper'"
+                    class="btn btn-primary text-xs px-4 py-1.5 shadow-sm"
+                    @click="promptRelinkFile(curBook)"
+                  >
+                    <i class="ri-upload-2-line mr-1"></i>重新选择本地文件连接
+                  </button>
                 </div>
               </div>
 
@@ -799,7 +820,32 @@ import { useLocalNotes } from './composables/useLocalNotes';
 import { useBilingualTranslate } from './composables/useBilingualTranslate';
 import { saveBookToDb, loadAllBooksFromDb, deleteBookFromDb } from './utils/storage';
 import { extractPdfToMarkdown, requestMinerUParse } from './utils/pdfTextExtractor';
-import { createSampleAcademicPaper } from './utils/sampleData';
+import { createSampleAcademicPaper, createSamplePdfBinary } from './utils/sampleData';
+
+async function getBookBinary(b: Book): Promise<ArrayBuffer | null> {
+  // 核心机制：每次需要读取文件时调用 b.file.arrayBuffer() 获取全新未分离的 ArrayBuffer
+  // PDF.js worker 内部转移 buffer 不会影响 File 实例，彻底规避 Cannot perform Construct on a detached ArrayBuffer
+  if (b.file) {
+    try {
+      return await b.file.arrayBuffer();
+    } catch (e) {
+      console.warn('读取本地书籍文件二进制失败:', e);
+    }
+  }
+  if (b.fileData) {
+    try {
+      if (b.fileData.byteLength === 0) {
+        console.warn('检测到已分离的 ArrayBuffer 缓存，跳过');
+      } else {
+        return b.fileData.slice(0);
+      }
+    } catch {}
+  }
+  if (b.id === 'sample-transformer-paper') {
+    return createSamplePdfBinary();
+  }
+  return null;
+}
 
 const {
   isDark, pageTheme, fontKey, fontSize, lineHeight, pageWidth,
@@ -1463,6 +1509,7 @@ function onDropFiles(files: File[]) {
 
 function makeBook(file: File): Book {
   const ext = extOf(file.name);
+  const localPath = (file as any).path || file.webkitRelativePath || file.name;
   return {
     id: uid(),
     title: baseName(file.name).replace(/[_·—]+/g, ' ').trim() || file.name,
@@ -1471,6 +1518,7 @@ function makeBook(file: File): Book {
     kind: EXT_KIND[ext] || 'other',
     size: file.size,
     file,
+    localPath,
     url: null,
     cover: null,
     toc: [],
@@ -1495,9 +1543,7 @@ async function addFiles(files: File[]) {
   for (const f of list) {
     if (books.value.some((b) => b.title === baseName(f.name) && b.size === f.size)) continue;
     const b = makeBook(f);
-    try {
-      b.fileData = await f.arrayBuffer();
-    } catch {}
+    // 不再向内存与 IndexedDB 写入庞大易损的 fileData，仅保存本地 File 句柄与元数据路径
     books.value.push(b);
     saveBookToDb(b);
   }
@@ -1512,9 +1558,10 @@ async function enrich(b: Book) {
   try {
     if (b.kind === 'pdf') {
       const pdfjs = await getPdfjsLib();
-      if (!pdfjs || !b.file) return;
-      const buf = await b.file.arrayBuffer();
-      const doc = await pdfjs.getDocument({ data: buf }).promise;
+      if (!pdfjs) return;
+      const buf = await getBookBinary(b);
+      if (!buf) return;
+      const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
       b.pageCount = doc.numPages;
       b.cover = await renderPdfCover(doc);
       try {
@@ -1552,8 +1599,21 @@ async function enrich(b: Book) {
       b.chapterCount = data.chapters.length;
       b.toc = await buildEpubToc(b, data);
       if (data.coverPath) {
-        const url = await assetUrl(data, data.coverPath);
-        if (url) b.cover = url;
+        try {
+          const f = data.zip.file(data.coverPath);
+          if (f) {
+            const ext = (data.coverPath.split('.').pop() || '').toLowerCase();
+            const mime = EPUB_MIME[ext] || 'image/jpeg';
+            const b64 = await f.async('base64');
+            b.cover = `data:${mime};base64,${b64}`;
+          } else {
+            const url = await assetUrl(data, data.coverPath);
+            if (url) b.cover = url;
+          }
+        } catch {
+          const url = await assetUrl(data, data.coverPath);
+          if (url) b.cover = url;
+        }
       }
     } else if (b.kind === 'text') {
       if (!b.file) return;
@@ -1632,6 +1692,27 @@ async function readEpub(b: Book): Promise<any> {
   return epubPending[b.id];
 }
 
+function promptRelinkFile(b: Book) {
+  const relinkInput = document.createElement('input');
+  relinkInput.type = 'file';
+  relinkInput.accept = '.' + b.ext;
+  relinkInput.style.display = 'none';
+  document.body.appendChild(relinkInput);
+  relinkInput.addEventListener('change', async () => {
+    const f = relinkInput.files && relinkInput.files[0];
+    if (f) {
+      b.file = f;
+      b.localPath = (f as any).path || f.webkitRelativePath || f.name;
+      b.size = f.size;
+      saveBookToDb(b);
+      toast(`已成功连接本地文件：${f.name}`, 'success');
+      loadBook(b);
+    }
+    relinkInput.remove();
+  });
+  relinkInput.click();
+}
+
 async function loadBook(b: Book) {
   if (!b) return;
   selPop.show = false;
@@ -1648,6 +1729,20 @@ async function loadBook(b: Book) {
   pdfWinSig = '';
   clearTimeout(pdfWinTimer);
   pdfWinTimer = 0;
+
+  if (!b.file && b.id !== 'sample-transformer-paper') {
+    const pathText = b.localPath || `${b.title}.${b.ext}`;
+    if (b.kind === 'pdf') {
+      pdfError.value = `本地文件未连接（记录路径：${pathText}）。请点击重新连接文件。`;
+      pdfLoading.value = false;
+      return;
+    }
+    if (b.kind === 'epub' || b.kind === 'text') {
+      epubError.value = `本地文件未连接（记录路径：${pathText}）。请点击重新连接文件。`;
+      epubLoading.value = false;
+      return;
+    }
+  }
 
   if (b.kind === 'pdf') {
     await loadPdf(b);
@@ -1756,8 +1851,10 @@ async function loadPdf(b: Book) {
   for (const k in canvasMap) delete canvasMap[k];
   try {
     const pdfjs = await getPdfjsLib();
-    if (!pdfjs || !b.file) throw new Error('PDF 引擎未加载');
-    const doc = await pdfjs.getDocument({ data: await b.file.arrayBuffer() }).promise;
+    if (!pdfjs) throw new Error('PDF 引擎未加载');
+    const buf = await getBookBinary(b);
+    if (!buf) throw new Error('未找到 PDF 文件数据');
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
     if (pdfDoc.value && pdfDoc.value !== doc) {
       try {
         pdfDoc.value.destroy();
@@ -1944,6 +2041,36 @@ function onReaderScroll() {
   }
 }
 
+async function fixEpubDomImages() {
+  const b = curBook.value;
+  if (!b || b.kind !== 'epub') return;
+  const data = epubStore[b.id];
+  if (!data) return;
+  await nextTick();
+  const root = readerBody.value;
+  if (!root) return;
+  const imgs = root.querySelectorAll('img[data-epub-src], image[data-epub-src]');
+  for (const el of Array.from(imgs)) {
+    const rawPath = el.getAttribute('data-epub-src');
+    if (!rawPath) continue;
+    const isSvgImg = el.tagName.toLowerCase() === 'image';
+    const currentSrc = isSvgImg ? (el.getAttribute('href') || el.getAttribute('xlink:href')) : el.getAttribute('src');
+    if (!currentSrc || (!currentSrc.startsWith('blob:') && !currentSrc.startsWith('data:'))) {
+      try {
+        const url = await assetUrl(data, rawPath);
+        if (url) {
+          if (isSvgImg) {
+            el.setAttribute('href', url);
+            el.setAttribute('xlink:href', url);
+          } else {
+            el.setAttribute('src', url);
+          }
+        }
+      } catch {}
+    }
+  }
+}
+
 async function afterChapterChange(opts?: any) {
   pageIdx.value = 0;
   scrollPercent.value = 0;
@@ -1952,6 +2079,7 @@ async function afterChapterChange(opts?: any) {
   if (opts && opts.ratio != null && scrollMode.value === 'page') pendingPageRatio = opts.ratio;
   await decorate();
   if (scrollMode.value === 'scroll') await landScrollChapter(opts);
+  await fixEpubDomImages();
 }
 
 function alignScroll(ratio: number) {
@@ -2739,13 +2867,9 @@ async function reExtractLocalForCurrentBook() {
   try {
     const pdfjs = await getPdfjsLib();
     if (!pdfjs) throw new Error('PDF 引擎未就绪');
-    let dataBuf: ArrayBuffer | null = b.fileData || null;
-    if (!dataBuf && b.file) {
-      dataBuf = await b.file.arrayBuffer();
-      b.fileData = dataBuf;
-    }
+    const dataBuf = await getBookBinary(b);
     if (!dataBuf) throw new Error('未找到 PDF 文件数据');
-    const doc = await pdfjs.getDocument({ data: dataBuf }).promise;
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(dataBuf) }).promise;
     const md = await extractPdfToMarkdown(doc);
     b.textMarkdown = md;
     toast('本地排版重构完成', 'success');
@@ -2766,11 +2890,7 @@ async function runMinerUForCurrentBook() {
     apiModalOpen.value = true;
     return;
   }
-  let dataBuf: ArrayBuffer | null = b.fileData || null;
-  if (!dataBuf && b.file) {
-    dataBuf = await b.file.arrayBuffer();
-    b.fileData = dataBuf;
-  }
+  const dataBuf = await getBookBinary(b);
   if (!dataBuf) {
     toast('未能读取到 PDF 文件原始数据', 'error');
     return;
@@ -2816,13 +2936,9 @@ async function toggleBilingual(b: Book) {
       textExtractLoadingText.value = '正在提取全文用于生成双语段落对照…';
       try {
         const pdfjs = await getPdfjsLib();
-        let dataBuf = b.fileData;
-        if (!dataBuf && b.file) {
-          dataBuf = await b.file.arrayBuffer();
-          b.fileData = dataBuf;
-        }
+        const dataBuf = await getBookBinary(b);
         if (dataBuf && pdfjs) {
-          const doc = await pdfjs.getDocument({ data: dataBuf }).promise;
+          const doc = await pdfjs.getDocument({ data: new Uint8Array(dataBuf) }).promise;
           sourceText = await extractPdfToMarkdown(doc);
           b.textMarkdown = sourceText;
         }

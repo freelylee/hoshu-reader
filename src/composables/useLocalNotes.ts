@@ -96,9 +96,9 @@ tags: [ReadingNotes, eBook, ${book.ext}]
   /**
    * 绑定本地文件夹（File System Access API）
    */
-  async function bindNotesDirectory(): Promise<boolean> {
+  async function bindNotesDirectory(): Promise<{ success: boolean; dirName?: string; error?: string }> {
     if (!('showDirectoryPicker' in window)) {
-      throw new Error('当前浏览器环境不支持文件夹直接绑定，但支持一键导出 .md 文件。');
+      return { success: false, error: '当前浏览器环境不支持文件夹直接绑定，但支持一键导出 .md 文件。' };
     }
     try {
       const handle = await (window as any).showDirectoryPicker({
@@ -106,10 +106,10 @@ tags: [ReadingNotes, eBook, ${book.ext}]
       });
       dirHandle.value = handle;
       dirName.value = handle.name || '本地笔记文件夹';
-      return true;
+      return { success: true, dirName: dirName.value };
     } catch (err: any) {
-      if (err && err.name === 'AbortError') return false;
-      throw err;
+      if (err && err.name === 'AbortError') return { success: false };
+      return { success: false, error: err?.message || '绑定文件夹失败' };
     }
   }
 
@@ -202,6 +202,7 @@ tags: [ReadingNotes, eBook, ${book.ext}]
     syncBookNotes,
     exportBookNotes,
     exportAllNotesZip,
-    buildBookMarkdown
+    buildBookMarkdown,
+    generateBookMarkdown: buildBookMarkdown
   };
 }

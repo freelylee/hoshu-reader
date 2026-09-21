@@ -60,6 +60,7 @@ export interface Book {
   size: number;
   file?: File;
   fileData?: ArrayBuffer;
+  localPath?: string;
   url?: string | null;
   cover?: string | null;
   toc: TocItem[];
