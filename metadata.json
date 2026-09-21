@@ -1,0 +1,6 @@
+{
+  "name": "电子书阅读器",
+  "description": "基于 Vue 3 和 Vite 的纯前端学术与电子书阅读器，支持 PDF/EPUB/TXT/MD 多格式。具备类似 Zotero 的 PDF 文本流阅读模式、LaTeX 公式与双栏重构、每本书独立 Markdown 文件持久化存储、以及一键段落级双语对照与翻译导出。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
