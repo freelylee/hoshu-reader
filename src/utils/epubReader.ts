@@ -4,8 +4,15 @@ import type { Book, TocItem } from '../types/reader';
 
 export async function parseEpub(b: Book) {
   let buf: ArrayBuffer | null = null;
+  if (!b.file && b.fileHandle) {
+    try {
+      b.file = await b.fileHandle.getFile();
+    } catch {}
+  }
   if (b.file) {
     buf = await b.file.arrayBuffer();
+  } else if (b.blob) {
+    buf = await b.blob.arrayBuffer();
   } else if (b.fileData) {
     buf = b.fileData.slice(0);
   }

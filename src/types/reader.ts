@@ -59,6 +59,8 @@ export interface Book {
   kind: BookKind;
   size: number;
   file?: File;
+  blob?: Blob;
+  fileHandle?: any;
   fileData?: ArrayBuffer;
   localPath?: string;
   url?: string | null;

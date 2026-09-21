@@ -24,8 +24,17 @@ export async function saveBookToDb(book: Book): Promise<void> {
     const tx = db.transaction(STORE_BOOKS, 'readwrite');
     const store = tx.objectStore(STORE_BOOKS);
 
-    // 仅存储书籍元数据、书签、笔记、高亮与本地文件路径，不存储臃肿易损的二进制内容
-    const clone = {
+    // 构造存储对象：存储不可变 Blob、文件句柄及元数据
+    // 注意：绝不存储易 detached 的裸 ArrayBuffer，存储标准 Blob
+    // Blob 由浏览器磁盘层驱动，不会因 Worker transfer 而被破坏，确保刷新页面后永不丢失
+    let blobToStore: Blob | null = null;
+    if (book.blob instanceof Blob) {
+      blobToStore = book.blob;
+    } else if (book.file instanceof Blob) {
+      blobToStore = book.file;
+    }
+
+    const clone: any = {
       id: book.id,
       title: book.title,
       author: book.author,
@@ -50,7 +59,9 @@ export async function saveBookToDb(book: Book): Promise<void> {
       textModeActive: book.textModeActive,
       bilingualActive: book.bilingualActive,
       bilingualParas: book.bilingualParas,
-      localPath: book.localPath || ''
+      localPath: book.localPath || '',
+      blob: blobToStore,
+      fileHandle: book.fileHandle || null
     };
 
     store.put(clone);
@@ -74,9 +85,24 @@ export async function loadAllBooksFromDb(): Promise<Book[]> {
       req.onsuccess = () => {
         const rawList = req.result || [];
         const books: Book[] = rawList.map((item: any) => {
-          // 剥离历史旧数据中的 fileData，纯净加载元数据
+          // 剥离历史旧数据中的 fileData，纯净加载元数据与 Blob
           const { fileData: _oldBuf, ...clean } = item;
-          return clean as Book;
+          let file: File | undefined = undefined;
+          if (clean.blob instanceof Blob) {
+            try {
+              file = new File([clean.blob], `${clean.title}.${clean.ext}`, {
+                type: clean.blob.type || (clean.kind === 'pdf' ? 'application/pdf' : 'application/octet-stream')
+              });
+            } catch {
+              // fallback
+            }
+          }
+          return {
+            ...clean,
+            file,
+            blob: clean.blob instanceof Blob ? clean.blob : undefined,
+            fileHandle: clean.fileHandle || undefined
+          } as Book;
         });
         resolve(books);
       };

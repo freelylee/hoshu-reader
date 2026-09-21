@@ -823,13 +823,27 @@ import { extractPdfToMarkdown, requestMinerUParse } from './utils/pdfTextExtract
 import { createSampleAcademicPaper, createSamplePdfBinary } from './utils/sampleData';
 
 async function getBookBinary(b: Book): Promise<ArrayBuffer | null> {
-  // 核心机制：每次需要读取文件时调用 b.file.arrayBuffer() 获取全新未分离的 ArrayBuffer
+  // 1. 如果有 File System Access API 句柄，优先尝试读取
+  if (!b.file && b.fileHandle) {
+    try {
+      b.file = await b.fileHandle.getFile();
+    } catch {}
+  }
+  // 2. 核心机制：每次需要读取文件时调用 b.file.arrayBuffer() 获取全新未分离的 ArrayBuffer
   // PDF.js worker 内部转移 buffer 不会影响 File 实例，彻底规避 Cannot perform Construct on a detached ArrayBuffer
   if (b.file) {
     try {
       return await b.file.arrayBuffer();
     } catch (e) {
       console.warn('读取本地书籍文件二进制失败:', e);
+    }
+  }
+  // 3. 从持久化只读 Blob 获取全新 ArrayBuffer，不可被 detach，永不损坏
+  if (b.blob) {
+    try {
+      return await b.blob.arrayBuffer();
+    } catch (e) {
+      console.warn('读取持久化 Blob 失败:', e);
     }
   }
   if (b.fileData) {
@@ -1474,7 +1488,11 @@ async function pickFiles() {
         ]
       });
       const files: File[] = [];
-      for (const h of handles) files.push(await h.getFile());
+      for (const h of handles) {
+        const file = await h.getFile();
+        (file as any).handle = h;
+        files.push(file);
+      }
       addFiles(files);
       return;
     } catch (e: any) {
@@ -1492,7 +1510,9 @@ async function pickDir() {
       for await (const [name, h] of (dir as any).entries()) {
         if (h.kind !== 'file') continue;
         if (BOOK_EXTS.indexOf(extOf(name)) === -1) continue;
-        files.push(await h.getFile());
+        const file = await h.getFile();
+        (file as any).handle = h;
+        files.push(file);
       }
       addFiles(files);
       return;
@@ -1518,6 +1538,8 @@ function makeBook(file: File): Book {
     kind: EXT_KIND[ext] || 'other',
     size: file.size,
     file,
+    blob: file,
+    fileHandle: (file as any).handle || null,
     localPath,
     url: null,
     cover: null,
@@ -1541,9 +1563,16 @@ async function addFiles(files: File[]) {
     return;
   }
   for (const f of list) {
-    if (books.value.some((b) => b.title === baseName(f.name) && b.size === f.size)) continue;
+    const existing = books.value.find((b) => b.title === baseName(f.name) && b.size === f.size);
+    if (existing) {
+      // 如果书架中已存在此书，补齐文件对象与持久化 Blob，并更新存储
+      existing.file = f;
+      existing.blob = f;
+      existing.fileHandle = (f as any).handle || null;
+      saveBookToDb(existing);
+      continue;
+    }
     const b = makeBook(f);
-    // 不再向内存与 IndexedDB 写入庞大易损的 fileData，仅保存本地 File 句柄与元数据路径
     books.value.push(b);
     saveBookToDb(b);
   }
@@ -1702,10 +1731,13 @@ function promptRelinkFile(b: Book) {
     const f = relinkInput.files && relinkInput.files[0];
     if (f) {
       b.file = f;
+      b.blob = f;
       b.localPath = (f as any).path || f.webkitRelativePath || f.name;
       b.size = f.size;
-      saveBookToDb(b);
-      toast(`已成功连接本地文件：${f.name}`, 'success');
+      await saveBookToDb(b);
+      pdfError.value = '';
+      epubError.value = '';
+      toast(`已成功重新连接本地文件：${f.name}`, 'success');
       loadBook(b);
     }
     relinkInput.remove();
@@ -1729,6 +1761,20 @@ async function loadBook(b: Book) {
   pdfWinSig = '';
   clearTimeout(pdfWinTimer);
   pdfWinTimer = 0;
+
+  // 尝试自动恢复本地文件对象：通过 File System Access API 句柄或持久化 Blob
+  if (!b.file && b.fileHandle) {
+    try {
+      b.file = await b.fileHandle.getFile();
+    } catch {}
+  }
+  if (!b.file && b.blob) {
+    try {
+      b.file = new File([b.blob], `${b.title}.${b.ext}`, {
+        type: b.blob.type || (b.kind === 'pdf' ? 'application/pdf' : 'application/octet-stream')
+      });
+    } catch {}
+  }
 
   if (!b.file && b.id !== 'sample-transformer-paper') {
     const pathText = b.localPath || `${b.title}.${b.ext}`;
@@ -3007,6 +3053,7 @@ function exportCurrentBilingualPdf() {
 function onShelfCtx(e: MouseEvent, _tag: string, b: Book) {
   openCtx(e, [
     { label: '打开阅读', icon: 'ri-book-open-line', act: () => openBook(b) },
+    { label: '重新连接/更换本地文件', icon: 'ri-upload-2-line', act: () => promptRelinkFile(b) },
     { label: '独立笔记 (.md)', icon: 'ri-markdown-line', act: () => openNotesModalForCurrent(b) },
     { label: '双语对照', icon: 'ri-translate-2', act: () => { openBook(b); toggleBilingual(b); } },
     { label: '书籍详情', icon: 'ri-information-line', act: () => showDetail(b) },
@@ -3023,6 +3070,8 @@ function showDetail(b: Book) {
       { k: '作者', v: b.author || '未知' },
       { k: '格式', v: `${b.ext.toUpperCase()} · ${b.kind}` },
       { k: '大小', v: fmtSize(b.size) },
+      { k: '本地文件路径', v: b.localPath || `${b.title}.${b.ext}` },
+      { k: '文件连接状态', v: (b.file || b.blob) ? '已就绪 (可直接阅读)' : '未连接 (点击右键可重新连接)' },
       { k: '章节', v: `${(b.chapters || b.toc).length} 项` },
       { k: '批注', v: `${b.annotations.length} 条` },
       { k: '进度', v: `${Math.round(b.progress * 100)}% · ${b.locationLabel || '未开始'}` },
